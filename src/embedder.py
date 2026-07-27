@@ -1,6 +1,10 @@
+"""
+Embedding module for FairHire AI.
+Wraps MiniLM and DeBERTa models behind a simple interface.
+"""
+
 import torch
 import numpy as np
-from typing import List, Union
 from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
 from sklearn.metrics.pairwise import cosine_similarity
@@ -8,58 +12,75 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 class CandidateEmbedder:
     """
-    A wrapper class to extract candidate embeddings using primary (MiniLM)
-    and secondary (DeBERTa-v3) transformer models.
+    Turns resume text into numerical vectors using transformer models.
+
+    Two models available:
+        - 'minilm'  : fast, 384-dim vectors, good for similarity (primary)
+        - 'deberta' : slower, 768-dim vectors, used for robustness check
     """
 
-    def __init__(self, model_type: str = "minilm", device: str = "cpu"):
-        self.model_type = model_type.lower()
+    MODELS = {
+        "minilm": "sentence-transformers/all-MiniLM-L6-v2",
+        "deberta": "microsoft/deberta-v3-base",
+    }
+
+    def __init__(self, model_type="minilm", device="cpu"):
+        if model_type not in self.MODELS:
+            raise ValueError(f"Use 'minilm' or 'deberta', got '{model_type}'")
+
+        self.model_type = model_type
         self.device = device
+        self.hf_id = self.MODELS[model_type]
 
-        if self.model_type == "minilm":
-            print(f"[Info] Loading primary model: all-MiniLM-L6-v2 on {self.device}...")
-            self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=self.device)
-        elif self.model_type == "deberta":
-            print(f"[Info] Loading secondary model: deberta-v3-base on {self.device}...")
-            self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
-            self.model = AutoModel.from_pretrained("microsoft/deberta-v3-base").to(self.device)
-            self.model.eval()
+        print(f"Loading {model_type} ({self.hf_id})...")
+
+        if model_type == "minilm":
+            self.model = SentenceTransformer(self.hf_id, device=device)
         else:
-            raise ValueError("Unsupported model_type. Choose 'minilm' or 'deberta'.")
+            self.tokenizer = AutoTokenizer.from_pretrained(self.hf_id)
+            self.model = AutoModel.from_pretrained(self.hf_id).to(device)
+            self.model.eval()
 
-    def encode(self, texts: Union[str, List[str]]) -> np.ndarray:
-        """Generates L2-normalized embeddings for input text or list of texts."""
+        print(f"Ready on {device}.\n")
+
+    def encode(self, texts, batch_size=32):
+        """Convert text(s) into normalised embedding vectors."""
         if isinstance(texts, str):
             texts = [texts]
 
         if self.model_type == "minilm":
-            return self.model.encode(texts, device=self.device, normalize_embeddings=True)
+            return self.model.encode(
+                texts, device=self.device,
+                normalize_embeddings=True,
+                batch_size=batch_size,
+                show_progress_bar=False,
+            )
 
-        elif self.model_type == "deberta":
-            inputs = self.tokenizer(
-                texts,
-                padding=True,
-                truncation=True,
-                max_length=256,
-                return_tensors="pt"
+        # DeBERTa: manual tokenize → forward pass → mean pool → normalize
+        all_embs = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            tokens = self.tokenizer(
+                batch, padding=True, truncation=True,
+                max_length=256, return_tensors="pt"
             ).to(self.device)
 
             with torch.no_grad():
-                outputs = self.model(**inputs)
+                out = self.model(**tokens)
 
-            # Mean pooling over token dimension
-            token_embeddings = outputs.last_hidden_state
-            mask = inputs["attention_mask"].unsqueeze(-1).float()
-            sum_embeddings = torch.sum(token_embeddings * mask, dim=1)
-            sum_mask = torch.clamp(mask.sum(dim=1), min=1e-9)
-            mean_embeddings = sum_embeddings / sum_mask
+            mask = tokens["attention_mask"].unsqueeze(-1).float()
+            pooled = (out.last_hidden_state * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+            normed = torch.nn.functional.normalize(pooled, p=2, dim=1)
+            all_embs.append(normed.cpu().numpy())
 
-            # L2 Normalize
-            normalized = torch.nn.functional.normalize(mean_embeddings, p=2, dim=1)
-            return normalized.cpu().numpy()
+        return np.vstack(all_embs)
 
-    def compare(self, text_a: str, text_b: str) -> float:
-        """Utility method to compute cosine similarity between two texts."""
-        emb_a = self.encode(text_a)
-        emb_b = self.encode(text_b)
-        return float(cosine_similarity(emb_a, emb_b)[0][0])
+    def compare(self, text_a, text_b):
+        """Cosine similarity between two texts. Returns float in [-1, 1]."""
+        return float(cosine_similarity(self.encode(text_a), self.encode(text_b))[0][0])
+
+    def rank(self, query, candidates):
+        """Score each candidate against a query. Returns list of floats."""
+        q = self.encode(query)
+        c = self.encode(candidates)
+        return cosine_similarity(q, c)[0].tolist()

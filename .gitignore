@@ -1,0 +1,39 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Model Cache (large HuggingFace model files — downloaded at runtime)
+models/
+*.bin
+*.safetensors
+*.onnx
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Files
+Thumbs.db
+.DS_Store
+
+# Jupyter Notebooks Checkpoints
+.ipynb_checkpoints/
+
+# Test & Coverage Reports
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Docs (generated — keep source .md files)
+*.docx
