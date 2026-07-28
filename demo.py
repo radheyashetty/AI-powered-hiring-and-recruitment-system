@@ -94,14 +94,14 @@ def test_model_comparison():
     """Do MiniLM and DeBERTa agree on who's the best candidate?"""
     print("\n--- Test 4: MiniLM vs DeBERTa ---\n")
 
-    m = CandidateEmbedder("minilm")
-    d = CandidateEmbedder("deberta")
+    minilm_embedder = CandidateEmbedder("minilm")
+    deberta_embedder = CandidateEmbedder("deberta")
 
     names = list(candidates.keys())
     texts = list(candidates.values())
 
-    m_scores = m.rank(job, texts)
-    d_scores = d.rank(job, texts)
+    m_scores = minilm_embedder.rank(job, texts)
+    d_scores = deberta_embedder.rank(job, texts)
 
     print(f"  {'Candidate':<28} {'MiniLM':>8} {'DeBERTa':>8}")
     print(f"  {'-'*46}")
